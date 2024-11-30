@@ -1,0 +1,15 @@
+[project]
+name = "comfyui_stablehair_ll"
+description = "Hair transfer"
+version = "1.0.0"
+license = {file = "LICENSE"}
+dependencies = ["numpy"]
+
+[project.urls]
+Repository = "https://github.com/lldacing/ComfyUI_StableHair_ll"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = "lldacing"
+DisplayName = "ComfyUI_StableHair_ll"
+Icon = ""
