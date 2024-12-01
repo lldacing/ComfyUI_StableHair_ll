@@ -30,8 +30,8 @@ class LoadStableHairRemoverModel:
             if os.path.exists(stable_hair_path):
                 for root, subdir, files in os.walk(stable_hair_path, followlinks=True):
                     for file in files:
-                        file_name, ext = file.split(".")
-                        if '.{}'.format(ext) in supported_pt_extensions:
+                        file_name_ext = file.split(".")
+                        if len(file_name_ext) > 1 and '.{}'.format(file_name_ext[-1]) in supported_pt_extensions:
                             model_paths.append(file)
         return {
             "required": {
@@ -48,6 +48,7 @@ class LoadStableHairRemoverModel:
     CATEGORY = "hair/transfer"
 
     def load_model(self, ckpt_name, bald_model, device):
+        model_management.soft_empty_cache()
         sd15_model_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
         bald_model_path = folder_paths.get_full_path_or_raise("diffusers", hair_model_path_format.format(bald_model))
         if device == "AUTO":
@@ -72,10 +73,7 @@ class LoadStableHairRemoverModel:
         remove_hair_pipeline.register_modules(controlnet=bald_converter)
 
         remove_hair_pipeline.scheduler = UniPCMultistepScheduler.from_config(remove_hair_pipeline.scheduler.config)
-        remove_hair_pipeline = remove_hair_pipeline.to(device_type)
-
-        if model_management.XFORMERS_IS_AVAILABLE and device_type == "cuda":
-            remove_hair_pipeline.enable_xformers_memory_efficient_attention()
+        remove_hair_pipeline.to(device_type)
 
         return remove_hair_pipeline,
 
@@ -90,8 +88,8 @@ class LoadStableHairTransferModel:
             if os.path.exists(stable_hair_path):
                 for root, subdir, files in os.walk(stable_hair_path, followlinks=True):
                     for file in files:
-                        file_name, ext = file.split(".")
-                        if '.{}'.format(ext) in supported_pt_extensions:
+                        file_name_ext = file.split(".")
+                        if len(file_name_ext) >1 and '.{}'.format(file_name_ext[-1]) in supported_pt_extensions:
                             model_paths.append(file)
         return {
             "required": {
@@ -110,6 +108,7 @@ class LoadStableHairTransferModel:
     CATEGORY = "hair/transfer"
 
     def load_model(self, ckpt_name, encoder_model, adapter_model, control_model, device):
+        model_management.soft_empty_cache()
         sd15_model_path = folder_paths.get_full_path_or_raise("checkpoints", ckpt_name)
         encoder_model_path = folder_paths.get_full_path_or_raise("diffusers",
                                                                  hair_model_path_format.format(encoder_model))
@@ -143,16 +142,13 @@ class LoadStableHairTransferModel:
         hair_encoder = RefHairUnet.from_config(pipeline.unet.config)
         _state_dict = torch.load(encoder_model_path)
         hair_encoder.load_state_dict(_state_dict, strict=False)
+        hair_encoder.to(device_type, dtype=weight_dtype)
         pipeline.register_modules(reference_encoder=hair_encoder)
 
         hair_adapter = adapter_injection(pipeline.unet, device=device_type, dtype=weight_dtype, use_resampler=False)
         _state_dict = torch.load(adapter_model_path)
 
         hair_adapter.load_state_dict(_state_dict, strict=False)
-
-        # 启用 xformers
-        if model_management.XFORMERS_IS_AVAILABLE and device_type == "cuda":
-            pipeline.enable_xformers_memory_efficient_attention()
 
         return pipeline,
 
@@ -167,7 +163,10 @@ class ApplyHairRemover:
                 "images": ("IMAGE",),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
-                "strength": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "strength": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 5.0, "step": 0.01}),
+            },
+            "optional": {
+                "cfg": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 100.0, "step": 0.1, "round": 0.01}),
             }
         }
 
@@ -176,7 +175,7 @@ class ApplyHairRemover:
     FUNCTION = "apply"
     CATEGORY = "hair/transfer"
 
-    def apply(self, bald_model, images, seed, steps, strength):
+    def apply(self, bald_model, images, seed, steps, strength, cfg=1.5):
         _images = []
         _masks = []
 
@@ -198,7 +197,7 @@ class ApplyHairRemover:
                     prompt="",
                     negative_prompt="",
                     num_inference_steps=steps,
-                    guidance_scale=1.5,
+                    guidance_scale=cfg,
                     width=W,
                     height=H,
                     image=im_tensor.unsqueeze(0),
@@ -231,8 +230,8 @@ class ApplyHairTransfer:
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 100.0, "step": 0.1, "round": 0.01}),
-                "control_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "adapter_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "control_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.01}),
+                "adapter_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.01}),
             }
         }
 
@@ -261,8 +260,8 @@ class ApplyHairTransfer:
             def callback_bar(step, timestep, latents):
                 comfy_pbar.update(1)
 
-            ref_image_np = (image.numpy() * 255).astype(numpy.uint8)
-            bald_image_np = (bald_image.squeeze(0).numpy() * 255).astype(numpy.uint8)
+            ref_image_np = (image.cpu().numpy() * 255).astype(numpy.uint8)
+            bald_image_np = (bald_image.squeeze(0).cpu().numpy() * 255).astype(numpy.uint8)
             with torch.no_grad():
                 # 采样，转移发型
                 result_image = model(

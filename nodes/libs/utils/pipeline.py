@@ -435,6 +435,7 @@ class StableHairPipeline(DiffusionPipeline, FromSingleFileMixin):
 
         ref_padding_latents = torch.ones_like(ref_image_latents) * -1
         ref_image_latents = torch.cat([ref_padding_latents, ref_image_latents]) if do_classifier_free_guidance else ref_image_latents
+        ref_image_latents.to(device)
 
         # Denoising loop
         for i, t in tqdm(enumerate(timesteps), total=len(timesteps), disable=(rank != 0)):
